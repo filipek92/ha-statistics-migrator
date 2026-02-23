@@ -1,14 +1,5 @@
 import click
-import shutil
-import time
 from ha_stats.db import DatabaseManager
-
-def create_backup(db_path):
-    timestamp = int(time.time())
-    backup_path = f"{db_path}.backup_delete_{timestamp}"
-    click.echo(f"  📦 Zálohování databáze: {backup_path}")
-    shutil.copy2(db_path, backup_path)
-    return backup_path
 
 @click.command('purge')
 @click.argument('entity_id')
@@ -60,7 +51,7 @@ def purge_command(ctx, entity_id, force):
                     # 3. Potvrzení (pouze pokud je force)
                     if not click.confirm(f"Opravdu chcete nenávratně smazat '{entity_id}'?"):
                         return
-                    create_backup(db_path)
+                    db.create_backup("delete")
                     
                     # 4. Mazání
                     click.echo("  Mazání z tabulky statistics...")

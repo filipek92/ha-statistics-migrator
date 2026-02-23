@@ -1,15 +1,6 @@
 import click
-import shutil
-import time
 from datetime import datetime
 from ha_stats.db import DatabaseManager
-
-def create_backup(db_path):
-    timestamp = int(time.time())
-    backup_path = f"{db_path}.backup_outliers_{timestamp}"
-    click.echo(f"  📦 Zálohování databáze: {backup_path}")
-    shutil.copy2(db_path, backup_path)
-    return backup_path
 
 @click.command('outliers')
 @click.argument('entity_id')
@@ -150,7 +141,7 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
                 return
             
             if click.confirm("Chcete nejprve vytvořit zálohu databáze? (Doporučeno, ale může trvat dlouho)", default=True):
-                create_backup(db_path)
+                db.create_backup("outliers")
             
             # 4. Aplikace opravy
             # Musíme aplikovat opravy chronologicky!

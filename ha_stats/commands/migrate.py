@@ -1,18 +1,9 @@
 import click
-import shutil
-import time
 from datetime import datetime
 
 def format_ts(ts):
     if ts is None: return "N/A"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-
-def create_backup(db_path):
-    timestamp = int(time.time())
-    backup_path = f"{db_path}.backup_{timestamp}"
-    click.echo(f"  📦 Zálohování databáze: {backup_path}")
-    shutil.copy2(db_path, backup_path)
-    return backup_path
 
 @click.command('migrate')
 @click.pass_context
@@ -171,7 +162,7 @@ def migrate_command(ctx):
                 click.echo("Operace zrušena.")
                 return
 
-            create_backup(db_path)
+            db.create_backup("migrate")
             
             try:
                 # 4.1 Delete overlap from SOURCE if needed
