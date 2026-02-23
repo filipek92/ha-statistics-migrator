@@ -150,13 +150,21 @@ def migrate_command(ctx):
                  click.echo(f"  🕳️  DÍRA: Mezi daty je mezera {gap_h} hodin.")
             
             # Check Offset (Last sum)
-            cursor.execute("SELECT sum FROM statistics WHERE metadata_id = ? ORDER BY start_ts DESC LIMIT 1", (source_id,))
-            last_sum_row = cursor.fetchone()
-            offset = last_sum_row['sum'] if last_sum_row and last_sum_row['sum'] else 0.0
+            # Důležité: Offset řešíme pouze pokud má entita 'has_sum=1'. U 'mean' senzorů (teplota) se offset nepřičítá.
+            cursor.execute("SELECT has_sum FROM statistics_meta WHERE id = ?", (source_id,))
+            source_has_sum = cursor.fetchone()['has_sum']
+
+            offset = 0.0
+            if source_has_sum:
+                cursor.execute("SELECT sum FROM statistics WHERE metadata_id = ? ORDER BY start_ts DESC LIMIT 1", (source_id,))
+                last_sum_row = cursor.fetchone()
+                offset = last_sum_row['sum'] if last_sum_row and last_sum_row['sum'] else 0.0
             
-            if offset > 0:
-                click.echo(f"  📈 DETEKOVÁN OFFSET (SUM): {offset}")
-                click.echo("      Tato hodnota se přičte ke všem záznamům cílové entity, aby grafy pokračovaly.")
+                if offset > 0:
+                    click.echo(f"  📈 DETEKOVÁN OFFSET (SUM): {offset}")
+                    click.echo("      Tato hodnota se přičte ke všem záznamům cílové entity, aby grafy pokračovaly.")
+            else:
+                click.echo("  ℹ️  Entita nemá 'has_sum', offset se nebude přičítat (OK pro teplotu, výkon atd.).")
             
             # 4. Potvrzení a Migrace
             if not click.confirm("\n❓ Chcete provést sloučení a migraci dat?"):
