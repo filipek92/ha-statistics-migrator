@@ -45,6 +45,11 @@ def list_command(ctx, search_term, no_details):
                     click.echo(f" [{row['id']}] {row['statistic_id']} (Unit: {unit})")
                 return
 
+            # Načteme všechny entity ze states_meta pro ověření aktivity
+            click.echo("Načítám seznam aktivních entit (states_meta)...")
+            cursor.execute("SELECT entity_id FROM states_meta")
+            active_entities = {row[0] for row in cursor.fetchall()}
+            
             # Detailní query s JOINem na statistiky (pomalé, ale užitečné)
             # Používáme MAX(start_ts) pro zjištění poslední aktivity
             click.echo("Načítám statistiky (to může chvíli trvat)...")
@@ -71,30 +76,35 @@ def list_command(ctx, search_term, no_details):
             with click.progressbar(meta_rows, label="Analyzuji data") as bar:
                 for row in bar:
                     mid = row['id']
+                    stat_id = row['statistic_id']
                     # Získáme Count a Max TS pro toto ID
                     # Index na metadata_id v tabulce statistics by měl existovat
                     cursor.execute("SELECT COUNT(*), MIN(start_ts), MAX(start_ts) FROM statistics WHERE metadata_id = ?", (mid,))
                     stats = cursor.fetchone()
+                    
+                    is_active_state = stat_id in active_entities
+                    
                     count = stats[0]
                     first_ts = stats[1]
                     last_ts = stats[2]
                     
                     results.append({
                         'id': mid,
-                        'name': row['statistic_id'],
+                        'name': stat_id,
                         'unit': row['unit_of_measurement'],
                         'count': count,
                         'first_ts': first_ts,
-                        'last_ts': last_ts
+                        'last_ts': last_ts,
+                        'has_state': is_active_state
                     })
             
             # Seřadíme podle last_seen (nejnovější nahoře)
             results.sort(key=lambda x: x['last_ts'] or 0, reverse=True)
 
             # Formátovaný výstup
-            click.echo("\n" + "="*115)
+            click.echo("\n" + "="*120)
             click.echo(f"{'ID':<5} | {'St':<2} | {'Entity ID':<50} | {'Jedn.':<6} | {'Záznamů':<8} | {'Od':<10} | {'Do'}")
-            click.echo("-" * 115)
+            click.echo("-" * 120)
 
             for res in results:
                 mid = res['id']
@@ -107,23 +117,39 @@ def list_command(ctx, search_term, no_details):
                 count = res['count']
                 first_ts = res['first_ts']
                 last_ts = res['last_ts']
+                has_state = res['has_state']
                 
                 first_seen_str = format_ts_rel(first_ts) if first_ts else "-"
                 last_seen_str = format_ts_rel(last_ts) if last_ts else "NIKDY"
                 
                 # Status Ikonka
+                # 🟢 Aktivní (v states_meta + nová data < 24h)
+                # 🟠 Varování (v states_meta ale starší data > 24h)
+                # 🔴 Neaktivní (není v states_meta, ale má data) -> Ghost?
+                # ⚪ Žádná data
+                
                 icon = "🟢"
-                if not last_ts:
-                    icon = "⚪" # Nikdy
-                elif (now_ts - last_ts) > (7 * 24 * 3600): # 7 dní
-                    icon = "🔴" # Staré
+                days_diff = (now_ts - last_ts) / (24 * 3600) if last_ts else 999
                 
                 if count == 0:
-                    icon = "⚠️ "
+                    icon = "⚠️ " # Prázdné (vytvořeno, ale bez dat)
+                elif not has_state:
+                     # Není v states_meta -> Orphan / Ghost
+                     # Může to být ale jen long-term statistika (např. gas importovaná), která nemá state?
+                     # Obvykle ale statistiky bez state entity jsou "sirotci".
+                     icon = "👻" 
+                elif days_diff > 7:
+                    icon = "🔴" # Velmi staré (> 7 dní)
+                elif days_diff > 1:
+                    icon = "🟠" # Starší (> 1 den)
+                else:
+                    icon = "🟢" # OK (< 1 den)
                 
                 click.echo(f"{mid:<5} | {icon} | {eid:<50} | {unit:<6} | {count:<8} | {first_seen_str:<10} | {last_seen_str}")
             
-            click.echo("\nLegenda: 🟢 Aktivní (<7 dní) | 🔴 Neaktivní (>7 dní) | ⚪ Žádná data | ⚠️  Bez záznamů")
+            click.echo("\nLegenda:")
+            click.echo(" 🟢 Aktivní (< 24h)     | 🟠 Starší data (> 1 den)   | 🔴 Neaktivní (> 7 dní)")
+            click.echo(" 👻 Sirotek (bez state) | ⚠️  Žádná historie       | ⚪ Nikdy neviděno")
 
     except Exception as e:
         click.echo(f"Chyba při čtení databáze: {e}", err=True)
