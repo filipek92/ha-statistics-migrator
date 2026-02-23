@@ -47,11 +47,15 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
             
             if threshold is None:
                 if max_rate is None:
-                    prompt_text = f"Zadejte maximální možnou změnu za hodinu (Max Rate)"
-                    if unit in ['kWh', 'Wh']:
+                    prompt_text = f"Zadejte maximální možnou změnu za hodinu (Max Rate) v {unit}/h"
+                    
+                    if unit == 'kWh':
                         prompt_text += f"\n (Např. hlavní jistič 3x25A -> max cca 17 kW. Zadejte '17')"
+                    elif unit == 'Wh':
+                        # 17 kW = 17000 W(h/h)
+                        prompt_text += f"\n (Např. hlavní jistič 3x25A -> max cca 17000 W. Zadejte '17000')"
                     elif unit == 'm³':
-                        prompt_text += f"\n (Např. max průtok vodoměru m³/h)"
+                        prompt_text += f"\n (Např. max průtok vodoměru. Zadejte kolik m³ proteče za hodinu)"
                     
                     max_rate = click.prompt(prompt_text, type=float)
                 
