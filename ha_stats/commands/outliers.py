@@ -135,9 +135,6 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
                 return
             
             create_backup(db_path)
-                return
-
-            create_backup(db_path)
             
             # 4. Aplikace opravy
             # Musíme aplikovat opravy chronologicky!
