@@ -161,8 +161,9 @@ def migrate_command(ctx):
             if not click.confirm("\n❓ Chcete provést sloučení a migraci dat?"):
                 click.echo("Operace zrušena.")
                 return
-
-            db.create_backup("migrate")
+            
+            if click.confirm("Chcete nejprve vytvořit zálohu databáze? (Doporučeno)", default=True):
+                db.create_backup("migrate")
             
             try:
                 # 4.1 Delete overlap from SOURCE if needed

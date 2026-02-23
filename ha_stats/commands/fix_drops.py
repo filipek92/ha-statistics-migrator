@@ -85,7 +85,8 @@ def fix_drops_command(ctx, entity_id, preview):
         click.echo("   (Tím se zajistí, že křivka neklesá. Ideální pro drobné výpadky.)")
         
         if click.confirm("Chcete provést opravu?"):
-            db.create_backup("fix_drops")
+            if click.confirm("Chcete vytvořit zálohu před opravou? (Doporučeno)", default=True):
+                db.create_backup("fix_drops")
             
             # 3. Aplikace opravy
             # Musíme projít znovu a updatovat. SQL update by byl složitý ("update to max(prev)"), 

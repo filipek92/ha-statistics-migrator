@@ -51,7 +51,9 @@ def purge_command(ctx, entity_id, force):
                     # 3. Potvrzení (pouze pokud je force)
                     if not click.confirm(f"Opravdu chcete nenávratně smazat '{entity_id}'?"):
                         return
-                    db.create_backup("delete")
+                    
+                    if click.confirm("Chcete vytvořit zálohu před smazáním?", default=True):
+                        db.create_backup("delete")
                     
                     # 4. Mazání
                     click.echo("  Mazání z tabulky statistics...")
