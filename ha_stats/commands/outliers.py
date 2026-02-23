@@ -64,16 +64,9 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
             else:
                 click.echo(f"  Hledám skoky > {threshold} {unit} (fixní práh)...")
 
-            # 3. Detekce pomocí Window Functions (LAG)
-            # Vypočítáme rozdíl (delta) i časový rozdíl (time_delta)
-            
+            # 3. Detekce (výpočet delta v Pythonu pro kompatibilitu se starším SQLite)
             query = """
-            SELECT 
-                id, 
-                start_ts, 
-                sum, 
-                (sum - LAG(sum, 1, sum) OVER (ORDER BY start_ts)) as delta,
-                (start_ts - LAG(start_ts, 1, start_ts)) OVER (ORDER BY start_ts) as time_delta
+            SELECT id, start_ts, sum
             FROM statistics
             WHERE metadata_id = ?
             ORDER BY start_ts
@@ -83,11 +76,27 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
             rows = cursor.fetchall()
             
             outliers = []
+            prev_sum = None
+            prev_ts = None
+            
             for row in rows:
-                delta = row['delta']
-                time_delta = row['time_delta'] # v sekundách
+                curr_sum = row['sum']
+                curr_ts = row['start_ts']
                 
-                if delta is None or time_delta is None or time_delta == 0:
+                if prev_sum is None:
+                    prev_sum = curr_sum
+                    prev_ts = curr_ts
+                    continue
+                
+                # Výpočet delt
+                delta = curr_sum - prev_sum
+                time_delta = curr_ts - prev_ts
+                
+                # Posuneme okno
+                prev_sum = curr_sum
+                prev_ts = curr_ts
+
+                if curr_sum is None or time_delta <= 0:
                     continue
                     
                 is_outlier = False
@@ -117,6 +126,8 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
                 if is_outlier:
                     # Uložíme si důvod pro výpis
                     row_dict = dict(row)
+                    row_dict['delta'] = delta
+                    row_dict['time_delta'] = time_delta
                     row_dict['reason'] = reason
                     outliers.append(row_dict)
             
@@ -138,7 +149,8 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
             if not click.confirm("Chcete provést opravu těchto skoků?"):
                 return
             
-            create_backup(db_path)
+            if click.confirm("Chcete nejprve vytvořit zálohu databáze? (Doporučeno, ale může trvat dlouho)", default=True):
+                create_backup(db_path)
             
             # 4. Aplikace opravy
             # Musíme aplikovat opravy chronologicky!
