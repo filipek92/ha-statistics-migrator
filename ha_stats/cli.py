@@ -4,6 +4,7 @@ from ha_stats.commands.analyze import analyze_command
 from ha_stats.commands.fix import fix_command
 from ha_stats.commands.migrate import migrate_command
 from ha_stats.commands.list_stats import list_command
+from ha_stats.commands.purge import purge_command
 
 @click.group()
 @click.option('--db-path', type=click.Path(exists=True), help='Cesta k souboru databáze (home-assistant_v2.db).')
@@ -28,6 +29,7 @@ cli.add_command(analyze_command, name='analyze')
 cli.add_command(fix_command, name='fix')
 cli.add_command(migrate_command, name='migrate')
 cli.add_command(list_command, name='list')
+cli.add_command(purge_command, name='purge')
 
 if __name__ == '__main__':
     cli()
