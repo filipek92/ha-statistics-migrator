@@ -72,28 +72,66 @@ def migrate_command(ctx):
             # 2. Výběr cíle (Smart Match)
             click.echo(f"\n🔍 Hledám cíle pro: {source_name}")
             
-            # Zkusíme najít část názvu (za poslední tečkou, před prvním podtržítkem po prefixu)
-            # Heuristika: vezmeme část názvu entity a najdeme podobné
-            name_parts = source_name.split('.')[-1].split('_')
-            search_part = name_parts[0] if len(name_parts) > 0 else source_name
+            # Heuristika pro hledání cílů:
+            # 1. Konec názvu (suffix) - typicky se mění prefix zařízení (sensor.old_power -> sensor.new_power)
+            # 2. Stejná jednotka - zásadní pro validní migraci
             
-            cursor.execute("""
-                SELECT id, statistic_id, unit_of_measurement 
-                FROM statistics_meta 
-                WHERE statistic_id LIKE ? AND id != ?
-            """, (f"%{search_part}%", source_id))
+            # Zkusíme extrahovat suffix za posledním podtržítkem
+            entity_part = source_name.split('.')[-1] # "old_device_energy"
+            parts = entity_part.split('_')
+            
+            potential_suffixes = []
+            if len(parts) > 1:
+                potential_suffixes.append(parts[-1]) # "energy"
+                if len(parts) > 2:
+                    potential_suffixes.append(f"{parts[-2]}_{parts[-1]}") # "device_energy"
+            
+            # Sestavíme query
+            query = "SELECT id, statistic_id, unit_of_measurement FROM statistics_meta WHERE id != ?"
+            params = [source_id]
+            
+            # Filtrujeme primárně podle jednotky (pokud je známá)
+            if source_unit:
+                query += " AND unit_of_measurement = ?"
+                params.append(source_unit)
+            
+            # Pokud máme suffixy, přidáme LIKE podmínky
+            if potential_suffixes:
+                print(f"   (Hledám entity končící na: {', '.join(potential_suffixes)} se stejnou jednotkou)")
+                like_clauses = " OR ".join(["statistic_id LIKE ?" for _ in potential_suffixes])
+                query += f" AND ({like_clauses})"
+                # Přidáme parametry pro LIKE (s % na začátku)
+                for s in potential_suffixes:
+                    params.append(f"%_{s}") # Hledáme "_suffix"
+            else:
+                # Fallback na hledání podobného textu
+                query += " AND statistic_id LIKE ?"
+                params.append(f"%{entity_part}%")
+
+            cursor.execute(query, params)
             targets = cursor.fetchall()
+            
+            # Omezíme počet výsledků, abychom nezahltili uživatele
+            if len(targets) > 15:
+                # Pokud je jich moc, zkusíme řadit podle podobnosti názvu?
+                # V SQL to neuděláme snadno, v Pythonu ano.
+                # Pro teď jen ořízneme.
+                pass 
 
             target_id = None
             target_name = None
             
             if targets:
-                click.echo("DOPORUČENÉ CÍLE:")
+                click.echo("\nDOPORUČENÉ CÍLE (Smart Match):")
                 targets_map = {}
                 display_idx = 0
                 for row in targets:
-                    match = "⭐" if row['unit_of_measurement'] == source_unit else "  "
-                    print(f" [{display_idx}] {match} {row['statistic_id']}")
+                    match_symbol = "⭐" # Vždy match, protože filtrujeme podle unit (pokud existuje)
+                    
+                    # Zvýrazníme, pokud je název velmi podobný (např. jen jiný prefix)
+                    # Ale pro uživatele stačí seznam.
+                    
+                    print(f" [{display_idx}] {match_symbol} {row['statistic_id']} ({row['unit_of_measurement']})")
                     targets_map[display_idx] = row
                     display_idx += 1
                 
@@ -106,14 +144,30 @@ def migrate_command(ctx):
                         target_name = targets_map[idx]['statistic_id']
             
             if not target_id:
-                target_name_input = click.prompt("Zadejte přesné ID cílové entity (např. sensor.xxx)")
-                cursor.execute("SELECT id, statistic_id FROM statistics_meta WHERE statistic_id = ?", (target_name_input,))
-                res = cursor.fetchone()
-                if not res:
-                    click.echo("❌ Cílová entita nenalezena v metadatech.")
+                # Pokud Smart Match nenašel, nabídneme vyhledávání (Search) místo slepého zadání ID
+                search_query = click.prompt("Zadejte část názvu cílové entity (nebo přesné ID)", default="")
+                if search_query:
+                    cursor.execute("SELECT id, statistic_id, unit_of_measurement FROM statistics_meta WHERE statistic_id LIKE ? AND id != ?", (f"%{search_query}%", source_id))
+                    manual_results = cursor.fetchall()
+                    
+                    if manual_results:
+                        click.echo("VÝSLEDKY HLEDÁNÍ:")
+                        m_map = {}
+                        for i, r in enumerate(manual_results):
+                            uname = r['unit_of_measurement']
+                            warn = "⚠️" if uname != source_unit else "OK"
+                            print(f" [{i}] {r['statistic_id']} (Unit: {uname}) {warn}")
+                            m_map[i] = r
+                        
+                        m_choice = click.prompt("Vyberte index (nebo enter pro zrušení)", default="")
+                        if m_choice.isdigit() and int(m_choice) in m_map:
+                             target_id = m_map[int(m_choice)]['id']
+                             target_name = m_map[int(m_choice)]['statistic_id']
+                    else:
+                        click.echo("❌ Nic nenalezeno.")
+                        return
+                else:
                     return
-                target_id = res['id']
-                target_name = res['statistic_id']
 
             # 3. Analýza konfliktu a offsetu
             click.echo(f"\n⏳ ANALÝZA: {source_name} -> {target_name}")
