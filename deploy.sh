@@ -11,6 +11,7 @@ TARGET="$1"
 REMOTE_DIR="/root/ha_stats_tool"
 PACKAGE_NAME="ha_stats_deploy.tar.gz"
 TEMP_DIR="deploy_temp"
+CACHE_DIR="libs_cache"
 
 echo "📦 Balím nástroj..."
 
@@ -22,10 +23,17 @@ mkdir -p "$TEMP_DIR/ha_stats"
 cp -r ha_stats/* "$TEMP_DIR/ha_stats/"
 cp requirements.txt "$TEMP_DIR/"
 
-# 3. Stažení závislostí pro snadné použití (vendorizace)
+# 3. Stažení závislostí pro snadné použití (vendorizace) s využitím cache
 #    Protože na HA OS může být problém s pip install, přibalíme 'click' rovnou.
-echo "   Stahuji závislosti (click)..."
-pip install -r requirements.txt --target "$TEMP_DIR/libs" --quiet
+if [ -d "$CACHE_DIR" ]; then
+    echo "   Používám cachované závislosti z $CACHE_DIR..."
+else 
+    echo "   Stahuji a cachuji závislosti (click) do $CACHE_DIR..."
+    pip install -r requirements.txt --target "$CACHE_DIR" --quiet
+fi
+
+# Kopírování z cache do cílového balíčku
+cp -r "$CACHE_DIR" "$TEMP_DIR/libs"
 
 # 4. Vytvoření spouštěcího skriptu (wrapper)
 cat <<EOF > "$TEMP_DIR/ha-stats"

@@ -40,5 +40,8 @@ home-assistant_v2.db-shm
 home-assistant_v2.db-wal
 home-assistant.log*
 
-# VS Code
-.vscode/
+
+# Deployment temporary and cache files
+deploy_temp/
+libs_cache/
+ha_stats_deploy.tar.gz

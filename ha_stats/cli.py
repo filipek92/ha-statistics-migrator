@@ -9,6 +9,7 @@ from ha_stats.commands.outliers import outliers_command
 from ha_stats.commands.backup import backup_command
 from ha_stats.commands.export_stats import export_command
 from ha_stats.commands.fix_drops import fix_drops_command
+from ha_stats.commands.diagnostics import diagnose_command
 
 @click.group()
 @click.option('--db-path', type=click.Path(exists=True), help='Cesta k souboru databáze (home-assistant_v2.db).')
@@ -38,6 +39,7 @@ cli.add_command(outliers_command, name='outliers')
 cli.add_command(backup_command, name='backup')
 cli.add_command(export_command, name='export')
 cli.add_command(fix_drops_command, name='fix-drops')
+cli.add_command(diagnose_command, name='diagnose')
 
 if __name__ == '__main__':
     cli()

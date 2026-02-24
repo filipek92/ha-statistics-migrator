@@ -180,19 +180,52 @@ def migrate_command(ctx):
             cursor.execute("SELECT MIN(start_ts), MAX(start_ts), COUNT(*) FROM statistics WHERE metadata_id = ?", (target_id,))
             t_min, t_max, t_count = cursor.fetchone()
 
-            click.echo(f"  Zdroj (OLD): {format_ts(s_min)} -> {format_ts(s_max)} ({s_count} záznamů)")
-            click.echo(f"  Cíl (NEW):   {format_ts(t_min)} -> {format_ts(t_max)} ({t_count} záznamů)")
+            click.echo(f"  Zdroj (SIROTEK): {source_name} | {format_ts(s_min)} -> {format_ts(s_max)} ({s_count} záznamů)")
+            click.echo(f"  Cíl (AKTIVNÍ):   {target_name} | {format_ts(t_min)} -> {format_ts(t_max)} ({t_count} záznamů)")
 
-            # Check overlap
-            overlap_deletion_cutoff = None
-            if t_min and s_max and t_min <= s_max:
-                overlap_h = round((s_max - t_min)/3600, 1)
-                click.echo(f"  ⚠️  VAROVÁNÍ: Překryv dat ({overlap_h} h)! Nová data začínají dříve ({format_ts(t_min)}), než stará končí.")
-                click.echo("      Pokud budete pokračovat, stará data od tohoto času budou smazána.")
-                overlap_deletion_cutoff = t_min
-            elif s_max and t_min:
-                 gap_h = round((t_min - s_max)/3600, 1)
-                 click.echo(f"  🕳️  DÍRA: Mezi daty je mezera {gap_h} hodin.")
+            # Check overlap logic
+            action_plan = "concat" # concat, merge_delete_source, merge_delete_target
+            
+            # Scénář A: Sirotek je starší (Standardní migrace) -> s_max < t_min
+            # Scénář B: Sirotek je novější (Inverzní migrace, např. 'battery_2') -> s_min > t_max
+            # Scénář C: Překryv (Overlap)
+            
+            cutoff_ts = None
+            
+            if s_max and t_min and s_max < t_min:
+                gap_h = round((t_min - s_max)/3600, 1)
+                click.echo(f"  ✅ STANDARDNÍ: Sirotek je starší. Navazuje s mezerou {gap_h} h.")
+                action_plan = "concat" # Source ends before Target starts
+                
+            elif s_min and t_max and s_min > t_max:
+                gap_h = round((s_min - t_max)/3600, 1)
+                click.echo(f"  ✅ INVERZNÍ: Sirotek je novější (asi dočasný senzor). Navazuje s mezerou {gap_h} h.")
+                action_plan = "concat_inverse" # Source starts after Target ends
+            
+            else:
+                # Překryv!
+                # Musíme zjistit rozsah překryvu
+                overlap_start = max(s_min, t_min) if s_min and t_min else (s_min or t_min)
+                overlap_end = min(s_max, t_max) if s_max and t_max else (s_max or t_max)
+                overlap_h = round((overlap_end - overlap_start)/3600, 1)
+                
+                click.echo(f"  ⚠️  VAROVÁNÍ: Překryv dat ({overlap_h} h) v rozsahu {format_ts(overlap_start)} -> {format_ts(overlap_end)}.")
+                
+                # Rozhodování, co smazat?
+                click.echo("  Musíme vyřešit konflikt v překrývajícím se období.")
+                choice = click.prompt(
+                    "  Která data v tomto období zachovat?\n"
+                    f"   [S] Sirotek ({source_name}) - smažeme data z cílové entity v době překryvu\n"
+                    f"   [C] Cíl     ({target_name}) - smažeme data ze sirotka (standardní chování)\n"
+                    "   Vyberte", default="C"
+                )
+                
+                if choice.upper() == 'S':
+                    click.echo("  -> Budou smazána data z CÍLOVÉ entity v době překryvu.")
+                    action_plan = "overlap_keep_source"
+                else:
+                    click.echo("  -> Budou smazána data ze ZDROJOVÉ entity (sirotka).")
+                    action_plan = "overlap_keep_target"
             
             # Check Offset (Last sum)
             # Důležité: Offset řešíme pouze pokud má entita 'has_sum=1'. U 'mean' senzorů (teplota) se offset nepřičítá.
@@ -220,25 +253,64 @@ def migrate_command(ctx):
                 db.create_backup("migrate")
             
             try:
-                # 4.1 Delete overlap from SOURCE if needed
-                if overlap_deletion_cutoff:
-                    click.echo(f"  Mazání překrývajících se starých dat (>= {format_ts(overlap_deletion_cutoff)})...")
-                    cursor.execute("DELETE FROM statistics WHERE metadata_id = ? AND start_ts >= ?", (source_id, overlap_deletion_cutoff))
-                    cursor.execute("DELETE FROM statistics_short_term WHERE metadata_id = ? AND start_ts >= ?", (source_id, overlap_deletion_cutoff))
+                # 4.1 Delete overlaps
+                if action_plan == "overlap_keep_target":
+                    click.echo(f"  Mazání duplicitních dat ze SIROTKA ({source_name}) (zachováváme Cíl)...")
+                    # Smažeme ze ZDROJE vše, co už je v Cíli (dle t_min, začátku cíle)
+                    # Nebo lépe: Vše, co přesahuje do t_min. 
+                    # Protože overlap znamená, že zdroj zasahuje do cíle nebo naopak.
+                    # Pokud držíme Cíl, zdroj nesmí mít nic, co má Cíl.
+                    cursor.execute("DELETE FROM statistics WHERE metadata_id = ? AND start_ts >= ?", (source_id, t_min))
+                    cursor.execute("DELETE FROM statistics_short_term WHERE metadata_id = ? AND start_ts >= ?", (source_id, t_min))
 
-                # 4.2 Update ID (The Migration)
-                click.echo("  Přepisování ID v tabulkách...")
+                elif action_plan == "overlap_keep_source":
+                    click.echo(f"  Mazání kolidujících dat z CÍLOVÉ entity ({target_name}) (upřednostňujeme Sirotka)...")
+                    # Smažeme z CÍLE vše, co je v intervalu zdroje
+                    cursor.execute("DELETE FROM statistics WHERE metadata_id = ? AND start_ts >= ? AND start_ts <= ?", (target_id, s_min, s_max))
+                    cursor.execute("DELETE FROM statistics_short_term WHERE metadata_id = ? AND start_ts >= ? AND start_ts <= ?", (target_id, s_min, s_max))
+
+                # 4.2 Update ID (The Migration) - toto proběhne vždy (spojení)
+                click.echo("  Přepisování ID sirotka na aktivní entitu...")
                 cursor.execute("UPDATE statistics SET metadata_id = ? WHERE metadata_id = ?", (target_id, source_id))
                 cursor.execute("UPDATE statistics_short_term SET metadata_id = ? WHERE metadata_id = ?", (target_id, source_id))
                 
-                # 4.3 Apply Offset to target data (starting from the gap/overlap point)
-                if offset > 0 and t_min:
-                    click.echo("  Přičítání offsetu k nové historii...")
-                    cursor.execute("UPDATE statistics SET sum = sum + ? WHERE metadata_id = ? AND start_ts >= ?", (offset, target_id, t_min))
-                    cursor.execute("UPDATE statistics_short_term SET sum = sum + ? WHERE metadata_id = ? AND start_ts >= ?", (offset, target_id, t_min))
+                # 4.3 Apply Offset logic
+                # Protože jsme právě změnili ID, vše je nyní pod 'target_id'.
+                # Musíme rozlišit:
+                #  (A) Standard: Zdroj byl starší -> jeho konec je offsetem pro původní Cíl.
+                #  (B) Inverse: Zdroj byl novější -> konec původního Cíle je offsetem pro "bývalého" sirotka.
+                
+                # Jak to poznáme po UPDATE? Podle časů s_max, t_min.
+                
+                # (A) Standard: s_max < t_min (nebo se dotýkají).
+                # Offset (poslední suma zdroje) se přičte k datům Cíle (ty jsou časově dál).
+                if offset > 0 and (s_max is not None and t_min is not None) and s_max < t_min:
+                     click.echo(f"  Přičítání offsetu {offset} k navazující historii (Standard)...")
+                     # Aplikujeme od t_min dál
+                     cursor.execute("UPDATE statistics SET sum = sum + ? WHERE metadata_id = ? AND start_ts >= ?", (offset, target_id, t_min))
+                     cursor.execute("UPDATE statistics_short_term SET sum = sum + ? WHERE metadata_id = ? AND start_ts >= ?", (offset, target_id, t_min))
+                
+                # (B) Inverzní: s_min > t_max.
+                # Zdroj (nyní target_id) začíná v s_min. Původní Cíl končil v t_max.
+                # Musíme vzít poslední sumu PŮVODNÍHO CÍLE a přičíst ji k "novým" datům (bývalý zdroj).
+                elif (s_min is not None and t_max is not None) and s_min > t_max:
+                     # Získáme poslední sumu z původního Cíle (ten končí kolem t_max)
+                     # Hledáme poslední záznam před s_min.
+                     cursor.execute("SELECT sum FROM statistics WHERE metadata_id = ? AND start_ts < ? ORDER BY start_ts DESC LIMIT 1", (target_id, s_min))
+                     last_target = cursor.fetchone()
+                     target_offset = last_target['sum'] if last_target else 0.0
+                     
+                     if target_offset > 0:
+                          click.echo(f"  Přičítání offsetu {target_offset} k připojené novější historii (Inverzní)...")
+                          # Aplikujeme od s_min dál (to jsou data bývalého zdroje)
+                          cursor.execute("UPDATE statistics SET sum = sum + ? WHERE metadata_id = ? AND start_ts >= ?", (target_offset, target_id, s_min))
+                          cursor.execute("UPDATE statistics_short_term SET sum = sum + ? WHERE metadata_id = ? AND start_ts >= ?", (target_offset, target_id, s_min))
+                
+                # Pokud byl overlap, offsety jsou složité a raději je neděláme automaticky, nebo by to chtělo re-kalkulaci. 
+                # (Předpokládáme, že uživatel ví, co dělá, když si vybral overlapping data.)
 
                 # 4.4 Cleanup
-                click.echo("  Mažu stará metadata...")
+                click.echo("  Mažu stará metadata sirotka...")
                 cursor.execute("DELETE FROM statistics_meta WHERE id = ?", (source_id,))
                 
                 conn.commit()

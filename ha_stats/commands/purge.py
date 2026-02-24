@@ -2,12 +2,14 @@ import click
 from ha_stats.db import DatabaseManager
 
 @click.command('purge')
-@click.argument('entity_id')
+@click.argument('entity_id', required=False)
 @click.option('--force', is_flag=True, help='Vynutit smazání i pokud existuje historie.')
 @click.pass_context
 def purge_command(ctx, entity_id, force):
     """
     Smaže statistiky pro danou entitu.
+    Pokud nezadáte ENTITY_ID, nabídne seznam sirotčích statistik k smazání.
+    
     Pokud entita nemá žádná data, smaže ji rovnou.
     Pokud data má, vyžaduje přepínač --force.
     """
@@ -18,6 +20,49 @@ def purge_command(ctx, entity_id, force):
         with db.get_connection() as conn:
             cursor = conn.cursor()
             
+            # Pokud není zadáno ID, nabídneme sirotky
+            if not entity_id:
+                click.echo("🔍 Hledám sirotčí záznamy (entity bez aktivního stavu)...")
+                cursor.execute("""
+                    SELECT id, statistic_id, unit_of_measurement
+                    FROM statistics_meta 
+                    WHERE statistic_id NOT IN (SELECT entity_id FROM states_meta)
+                """)
+                orphans = cursor.fetchall()
+                
+                if not orphans:
+                    click.echo("✅ Žádní sirotci nenalezeni. Zadejte prosím ID entity jako argument.")
+                    return
+
+                # Načteme s countem
+                orphans_data = []
+                for row in orphans:
+                    cursor.execute("SELECT COUNT(*) FROM statistics WHERE metadata_id = ?", (row['id'],))
+                    cnt = cursor.fetchone()[0]
+                    orphans_data.append({
+                        'id': row['id'], 
+                        'statistic_id': row['statistic_id'], 
+                        'unit': row['unit_of_measurement'], 
+                        'count': cnt
+                    })
+
+                click.echo(f"\n📍 NALEZENÍ SIROTCI ({len(orphans)}):")
+                for idx, row in enumerate(orphans_data):
+                    unit = row['unit'] or 'N/A'
+                    count = row['count']
+                    click.echo(f" [{idx}] {row['statistic_id']:<50} (Unit: {unit}, Záznamů: {count})")
+                
+                choice = click.prompt("\nVyberte index entity ke smazání (nebo 'q' pro konec)", default="q")
+                if not choice.isdigit():
+                    return
+                
+                idx = int(choice)
+                if 0 <= idx < len(orphans_data):
+                    entity_id = orphans_data[idx]['statistic_id']
+                else:
+                    click.echo("Neplatný index.")
+                    return
+
             # 1. Získání ID metadat
             cursor.execute("SELECT id FROM statistics_meta WHERE statistic_id = ?", (entity_id,))
             row = cursor.fetchone()
