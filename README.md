@@ -18,7 +18,50 @@ CLI nástroj pro správu, analýzu a opravu dlouhodobých statistik v databázi 
 > Software je poskytován „tak, jak je“, bez jakékoli záruky (viz [LICENSE](LICENSE)). Autor nenese
 > **žádnou odpovědnost** za ztrátu dat ani jiné škody vzniklé jeho použitím.
 
-## Instalace na HA
+## Instalace na HA (doporučeno): Advanced SSH & Web Terminal + git clone
+
+1. Nainstalujte doplněk **Advanced SSH & Web Terminal** (Nastavení → Doplňky → Obchod s doplňky).
+2. V záložce **Konfigurace** doplňku přidejte balíčky, aby se instalovaly při každém startu doplňku:
+
+   ```yaml
+   packages:
+     - git
+     - python3
+     - py3-click
+   ```
+
+   Doplněk uložte a restartujte.
+3. Otevřete terminál (webový nebo přes SSH) a naklonujte repozitář do `/share`, kde přežije restart doplňku:
+
+   ```bash
+   cd /share
+   git clone https://github.com/filipek92/ha-statistics-migrator.git
+   cd ha-statistics-migrator
+   ```
+
+4. Ověřte, že nástroj funguje. Databázi `/config/home-assistant_v2.db` najde sám:
+
+   ```bash
+   python3 -m ha_stats.cli --help
+   python3 -m ha_stats.cli list
+   ```
+
+5. Před jakoukoli změnou udělejte zálohu a zastavte Home Assistant. Po dokončení ho znovu spusťte:
+
+   ```bash
+   python3 -m ha_stats.cli backup
+   ha core stop
+   python3 -m ha_stats.cli migrate      # případně jiný zapisující příkaz
+   ha core start
+   ```
+
+Aktualizace na novou verzi: `cd /share/ha-statistics-migrator && git pull`.
+
+> [!NOTE]
+> Zálohy (`home-assistant_v2.db.backup_*`) vznikají vedle databáze v `/config` a mají velikost celé DB.
+> Staré zálohy průběžně mažte, jinak zabírají místo a zvětšují i zálohy Home Assistantu.
+
+## Alternativa: nasazení z počítače (`deploy.sh`)
 
 ```bash
 ./deploy.sh root@hass.lan        # zabalí nástroj i s knihovnou click a nahraje do /root/ha_stats_tool
@@ -26,7 +69,9 @@ ssh root@hass.lan
 cd /root/ha_stats_tool && ./ha-stats --help
 ```
 
-Lokálně (na kopii DB staženou přes `./download.sh [host]`):
+## Lokální použití
+
+Na kopii DB stažené přes `./download.sh [host]`:
 
 ```bash
 pip install -r requirements.txt
