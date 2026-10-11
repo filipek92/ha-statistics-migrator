@@ -1,4 +1,5 @@
 import click
+from ha_stats.utils import get_db, warn_if_ha_running
 
 @click.command('fix')
 @click.argument('entity_id')
@@ -14,7 +15,7 @@ def fix_command(ctx, entity_id, has_mean, has_sum):
         click.echo("Musíte specifikovat alespoň jednu změnu (--has-mean nebo --has-sum).")
         return
 
-    db = ctx.obj['db']
+    db = get_db(ctx)
     
     try:
         with db.get_connection() as conn:
@@ -42,6 +43,9 @@ def fix_command(ctx, entity_id, has_mean, has_sum):
                 params.append(1 if has_sum else 0)
             
             params.append(m_id)
+
+            if not warn_if_ha_running(db):
+                return
             
             query = f"UPDATE statistics_meta SET {', '.join(updates)} WHERE id = ?"
             cursor.execute(query, params)
@@ -50,5 +54,7 @@ def fix_command(ctx, entity_id, has_mean, has_sum):
             click.echo(f"✅ Metadata pro '{entity_id}' (ID: {m_id}) aktualizována.")
             click.echo(f"  Změny: {', '.join(updates)}")
             
+    except click.exceptions.Abort:
+        raise
     except Exception as e:
         click.echo(f"Chyba při opravě: {e}", err=True)

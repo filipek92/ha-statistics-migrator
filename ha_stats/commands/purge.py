@@ -1,5 +1,5 @@
 import click
-from ha_stats.db import DatabaseManager
+from ha_stats.utils import get_db, find_orphans, prompt_index, warn_if_ha_running
 
 @click.command('purge')
 @click.argument('entity_id', required=False)
@@ -13,8 +13,7 @@ def purge_command(ctx, entity_id, force):
     Pokud entita nemá žádná data, smaže ji rovnou.
     Pokud data má, vyžaduje přepínač --force.
     """
-    db: DatabaseManager = ctx.obj['db']
-    db_path = db.db_path
+    db = get_db(ctx)
 
     try:
         with db.get_connection() as conn:
@@ -23,12 +22,7 @@ def purge_command(ctx, entity_id, force):
             # Pokud není zadáno ID, nabídneme sirotky
             if not entity_id:
                 click.echo("🔍 Hledám sirotčí záznamy (entity bez aktivního stavu)...")
-                cursor.execute("""
-                    SELECT id, statistic_id, unit_of_measurement
-                    FROM statistics_meta 
-                    WHERE statistic_id NOT IN (SELECT entity_id FROM states_meta)
-                """)
-                orphans = cursor.fetchall()
+                orphans = find_orphans(cursor)
                 
                 if not orphans:
                     click.echo("✅ Žádní sirotci nenalezeni. Zadejte prosím ID entity jako argument.")
@@ -52,16 +46,10 @@ def purge_command(ctx, entity_id, force):
                     count = row['count']
                     click.echo(f" [{idx}] {row['statistic_id']:<50} (Unit: {unit}, Záznamů: {count})")
                 
-                choice = click.prompt("\nVyberte index entity ke smazání (nebo 'q' pro konec)", default="q")
-                if not choice.isdigit():
+                idx = prompt_index("\nVyberte index entity ke smazání (enter pro konec)", len(orphans_data))
+                if idx is None:
                     return
-                
-                idx = int(choice)
-                if 0 <= idx < len(orphans_data):
-                    entity_id = orphans_data[idx]['statistic_id']
-                else:
-                    click.echo("Neplatný index.")
-                    return
+                entity_id = orphans_data[idx]['statistic_id']
 
             # 1. Získání ID metadat
             cursor.execute("SELECT id FROM statistics_meta WHERE statistic_id = ?", (entity_id,))
@@ -96,6 +84,9 @@ def purge_command(ctx, entity_id, force):
                     # 3. Potvrzení (pouze pokud je force)
                     if not click.confirm(f"Opravdu chcete nenávratně smazat '{entity_id}'?"):
                         return
+
+                    if not warn_if_ha_running(db):
+                        return
                     
                     if click.confirm("Chcete vytvořit zálohu před smazáním?", default=True):
                         db.create_backup("delete")
@@ -108,6 +99,8 @@ def purge_command(ctx, entity_id, force):
                     cursor.execute("DELETE FROM statistics_short_term WHERE metadata_id = ?", (m_id,))
             else:
                 click.echo(f"ℹ️  Entita '{entity_id}' je prázdná (žádná historie). Může být bezpečně smazána.")
+                if not warn_if_ha_running(db):
+                    return
 
             click.echo("  Odstraňování metadat...")
             cursor.execute("DELETE FROM statistics_meta WHERE id = ?", (m_id,))
@@ -115,5 +108,7 @@ def purge_command(ctx, entity_id, force):
             conn.commit()
             click.echo(f"✅ Entita '{entity_id}' byla úspěšně odstraněna.")
 
+    except click.exceptions.Abort:
+        raise
     except Exception as e:
         click.echo(f"Chyba při mazání: {e}", err=True)

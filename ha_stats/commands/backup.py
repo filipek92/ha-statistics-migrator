@@ -1,5 +1,5 @@
 import click
-from ha_stats.db import DatabaseManager
+from ha_stats.utils import get_db
 
 @click.command('backup')
 @click.option('--suffix', default=None, help='Volitelný suffix pro název záložního souboru.')
@@ -8,10 +8,7 @@ def backup_command(ctx, suffix):
     """
     Vytvoří zálohu databáze (používá SQLite Online Backup API).
     """
-    db: DatabaseManager = ctx.obj.get('db')
-    if not db:
-        click.echo("Chyba: Databáze nebyla inicializována.", err=True)
-        return
+    db = get_db(ctx)
 
     try:
         backup_path = db.create_backup(suffix=suffix or "manual")

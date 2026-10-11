@@ -1,6 +1,5 @@
 import click
-from datetime import datetime
-from ha_stats.db import DatabaseManager
+from ha_stats.utils import format_ts, get_db, warn_if_ha_running
 
 @click.command('outliers')
 @click.argument('entity_id')
@@ -13,8 +12,7 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
     Ideální pro entity spotřeby, které měly chybný vysoký odečet.
     Pokud nezadáte --threshold, nástroj se zeptá na maximální reálnou změnu (Rate).
     """
-    db: DatabaseManager = ctx.obj['db']
-    db_path = db.db_path
+    db = get_db(ctx)
 
     try:
         with db.get_connection() as conn:
@@ -74,6 +72,10 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
                 curr_sum = row['sum']
                 curr_ts = row['start_ts']
                 
+                # Záznamy bez sumy přeskočíme (porovnáváme s posledním platným)
+                if curr_sum is None:
+                    continue
+
                 if prev_sum is None:
                     prev_sum = curr_sum
                     prev_ts = curr_ts
@@ -87,7 +89,7 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
                 prev_sum = curr_sum
                 prev_ts = curr_ts
 
-                if curr_sum is None or time_delta <= 0:
+                if time_delta <= 0:
                     continue
                     
                 is_outlier = False
@@ -131,13 +133,16 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
             click.echo("-" * 80)
             
             for row in outliers:
-                ts_str = datetime.fromtimestamp(row['start_ts']).strftime('%Y-%m-%d %H:%M:%S')
+                ts_str = format_ts(row['start_ts'])
                 duration_min = round(row['time_delta'] / 60, 1) if row['time_delta'] else 0
                 click.echo(f"{ts_str:<20} | {row['sum']:<10.2f} | {row['delta']:<12.2f} | {duration_min:<5} min | {row['reason']}")
 
             # 4. Potvrzení opravy
             click.echo("\n💡 Oprava: Odečte velikost skoku ode všech následujících záznamů.")
             if not click.confirm("Chcete provést opravu těchto skoků?"):
+                return
+
+            if not warn_if_ha_running(db):
                 return
             
             if click.confirm("Chcete nejprve vytvořit zálohu databáze? (Doporučeno, ale může trvat dlouho)", default=True):
@@ -155,7 +160,7 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
                 # Pokud je delta kladná (skok nahoru), musíme odečíst. 
                 # Pokud je delta záporná (skok dolů), přičteme.
                 
-                click.echo(f"  Opravuji skok z času {datetime.fromtimestamp(jump_ts).strftime('%H:%M:%S')} (delta {jump_val:.2f})...")
+                click.echo(f"  Opravuji skok z času {format_ts(jump_ts)} (delta {jump_val:.2f})...")
                 
                 # Oprava v long-term statistics
                 cursor.execute("UPDATE statistics SET sum = sum - ? WHERE metadata_id = ? AND start_ts >= ?", (jump_val, m_id, jump_ts))
@@ -169,5 +174,7 @@ def outliers_command(ctx, entity_id, threshold, max_rate):
             click.echo(f"✅ Hotovo. Opraveno {count_fixes} skoků.")
             click.echo("Poznámka: Projeví se v grafech po restartu HA nebo obnovení stránky.")
 
+    except click.exceptions.Abort:
+        raise
     except Exception as e:
         click.echo(f"Chyba: {e}", err=True)

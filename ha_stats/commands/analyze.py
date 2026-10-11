@@ -1,6 +1,5 @@
 import click
-import sqlite3
-from datetime import datetime
+from ha_stats.utils import format_ts, get_db
 
 @click.command('analyze')
 @click.argument('entity_id')
@@ -10,10 +9,7 @@ def analyze_command(ctx, entity_id):
     Provede detailní analýzu statistik pro danou entitu.
     Zkontroluje metadata, duplicity, počet záznamů a aktuální stav.
     """
-    db = ctx.obj.get('db')
-    if not db:
-        click.echo("Chyba: Databáze není dostupná.")
-        return
+    db = get_db(ctx)
 
     try:
         with db.get_connection() as conn:
@@ -50,10 +46,8 @@ def analyze_command(ctx, entity_id):
                 count, min_ts, max_ts = stats
                 
                 if count and count > 0:
-                    min_date = datetime.fromtimestamp(min_ts).strftime('%Y-%m-%d %H:%M:%S') if min_ts else "N/A"
-                    max_date = datetime.fromtimestamp(max_ts).strftime('%Y-%m-%d %H:%M:%S') if max_ts else "N/A"
                     click.echo(f"  Počet záznamů v 'statistics': {count}")
-                    click.echo(f"  Rozsah dat: {min_date} - {max_date}")
+                    click.echo(f"  Rozsah dat: {format_ts(min_ts)} - {format_ts(max_ts)}")
                 else:
                     click.echo("  ⚠️ Žádná data v tabulce statistics.")
 
@@ -85,8 +79,7 @@ def analyze_command(ctx, entity_id):
                 if latest_state:
                     l_state = latest_state['state']
                     l_ts = latest_state['last_updated_ts']
-                    l_date = datetime.fromtimestamp(l_ts).strftime('%Y-%m-%d %H:%M:%S') if l_ts else "N/A"
-                    click.echo(f"Poslední známý stav: {l_state} (změněno: {l_date})")
+                    click.echo(f"Poslední známý stav: {l_state} (změněno: {format_ts(l_ts)})")
                 else:
                     click.echo("⚠️ Žádný záznam v tabulce states (historie).")
             else:

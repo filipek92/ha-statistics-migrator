@@ -1,9 +1,8 @@
 import click
-from datetime import datetime, timedelta
+from ha_stats.utils import format_ts, get_db, prompt_index, warn_if_ha_running
 
-def format_ts(ts):
-    if ts is None: return "N/A"
-    return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+# Délka jednoho dlouhodobého záznamu (hodinová statistika)
+LONG_TERM_PERIOD_SEC = 3600
 
 def format_duration(seconds):
     hours = seconds / 3600
@@ -21,7 +20,7 @@ def diagnose_command(ctx, entity_id, threshold):
     Analyzuje kontinuitu dat entity a hledá díry v záznamech.
     Vypíše seznam spojitých bloků a mezer.
     """
-    db = ctx.obj['db']
+    db = get_db(ctx)
     
     with db.get_connection() as conn:
         cursor = conn.cursor()
@@ -46,8 +45,8 @@ def diagnose_command(ctx, entity_id, threshold):
                 unit = row['unit_of_measurement'] or 'N/A'
                 click.echo(f" [{idx}] {row['statistic_id']} (Unit: {unit})")
             
-            idx = click.prompt("Vyberte index (nebo -1 pro zrušení)", type=int)
-            if idx < 0: return
+            idx = prompt_index("Vyberte index (enter pro zrušení)", len(results))
+            if idx is None: return
 
             target_id = results[idx]['id']
             target_name = results[idx]['statistic_id']
@@ -68,7 +67,7 @@ def diagnose_command(ctx, entity_id, threshold):
         click.echo(f"\n📊 ANALÝZA KONTINUITY: {target_name} (ID: {target_id})")
         click.echo("Načítám záznamy...")
         
-        cursor.execute("SELECT start_ts, state, sum FROM statistics WHERE metadata_id = ? ORDER BY start_ts ASC", (target_id,))
+        cursor.execute("SELECT start_ts FROM statistics WHERE metadata_id = ? ORDER BY start_ts ASC", (target_id,))
         records = cursor.fetchall()
         
         count = len(records)
@@ -155,8 +154,18 @@ def diagnose_command(ctx, entity_id, threshold):
                 click.echo(f"   Od: {format_ts(to_delete['start'])}")
                 click.echo(f"   Do: {format_ts(to_delete['end'])}")
                 click.echo(f"   Celkem {to_delete['count']} záznamů.")
+                if 0 < idx < len(blocks) - 1:
+                    click.echo("   ℹ️  Blok je uprostřed dat – u kumulativních entit (sum) může na hranici vzniknout skok.")
+
+                # Poslední hodinový záznam bloku pokrývá i následující hodinu krátkodobých statistik
+                # (ale nikdy nesmíme zasáhnout do dalšího bloku)
+                short_end = to_delete['end'] + LONG_TERM_PERIOD_SEC
+                if idx + 1 < len(blocks):
+                    short_end = min(short_end, blocks[idx + 1]['start'])
                 
                 if click.confirm("Opravdu chcete tato data TRVALE smazat?"):
+                    if not warn_if_ha_running(db):
+                        return
                     if click.confirm("Vytvořit zálohu před smazáním?", default=True):
                          db.create_backup("delete_block")
                     
@@ -167,8 +176,8 @@ def diagnose_command(ctx, entity_id, threshold):
                         ).rowcount
                         
                         count_short = cursor.execute(
-                            "DELETE FROM statistics_short_term WHERE metadata_id = ? AND start_ts >= ? AND start_ts <= ?", 
-                            (target_id, to_delete['start'], to_delete['end'])
+                            "DELETE FROM statistics_short_term WHERE metadata_id = ? AND start_ts >= ? AND start_ts < ?", 
+                            (target_id, to_delete['start'], short_end)
                         ).rowcount
                         
                         conn.commit()

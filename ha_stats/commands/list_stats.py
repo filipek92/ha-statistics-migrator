@@ -1,13 +1,6 @@
 import click
-import sqlite3
 import time
-from datetime import datetime
-from ha_stats.db import DatabaseManager
-
-def format_ts_rel(ts):
-    if not ts: return "N/A"
-    dt = datetime.fromtimestamp(ts)
-    return dt.strftime('%Y-%m-%d')
+from ha_stats.utils import format_ts, get_db, is_external_statistic
 
 @click.command('list')
 @click.argument('search_term', required=False)
@@ -16,9 +9,10 @@ def format_ts_rel(ts):
 def list_command(ctx, search_term, no_details):
     """
     Vypíše statistiky. Zobrazí počet záznamů, datum poslední změny a status.
-    Zelená (🟢) = Aktivní (< 7 dní), Červená (🔴) = Staré data.
+    🟢 < 24 h, 🟠 > 1 den, 🔴 > 7 dní, 👻 sirotek (entita neexistuje),
+    🔗 externí statistika (např. z integrace), ⚠️ metadata bez dat.
     """
-    db: DatabaseManager = ctx.obj['db']
+    db = get_db(ctx)
     
     try:
         with db.get_connection() as conn:
@@ -102,9 +96,9 @@ def list_command(ctx, search_term, no_details):
             results.sort(key=lambda x: x['last_ts'] or 0, reverse=True)
 
             # Formátovaný výstup
-            click.echo("\n" + "="*120)
-            click.echo(f"{'ID':<5} | {'St':<2} | {'Entity ID':<50} | {'Jedn.':<6} | {'Záznamů':<8} | {'Od':<10} | {'Do'}")
-            click.echo("-" * 120)
+            click.echo("\n" + "="*145)
+            click.echo(f"{'ID':<5} | {'St':<2} | {'Entity ID':<75} | {'Jedn.':<6} | {'Záznamů':<8} | {'Od':<10} | {'Do'}")
+            click.echo("-" * 145)
 
             # Počítadla pro souhrn
             stats_counts = {
@@ -112,14 +106,14 @@ def list_command(ctx, search_term, no_details):
                 'older': 0,
                 'inactive': 0,
                 'ghost': 0,
-                'empty': 0,
-                'never': 0
+                'external': 0,
+                'empty': 0
             }
 
             for res in results:
                 mid = res['id']
                 eid = res['name']
-                if len(eid) > 48: eid = eid[:45] + "..."
+                if len(eid) > 73: eid = eid[:70] + "..."
                 
                 unit = res['unit'] or "-"
                 if len(unit) > 6: unit = unit[:6]
@@ -129,19 +123,18 @@ def list_command(ctx, search_term, no_details):
                 last_ts = res['last_ts']
                 has_state = res['has_state']
                 
-                first_seen_str = format_ts_rel(first_ts) if first_ts else "-"
-                last_seen_str = format_ts_rel(last_ts) if last_ts else "NIKDY"
+                first_seen_str = format_ts(first_ts, '%Y-%m-%d') if first_ts else "-"
+                last_seen_str = format_ts(last_ts, '%Y-%m-%d') if last_ts else "NIKDY"
                 
                 # Status Ikonka
-                icon = "🟢"
                 days_diff = (now_ts - last_ts) / (24 * 3600) if last_ts else 999
                 
                 if count == 0:
                     icon = "⚠️ " # Prázdné (vytvořeno, ale bez dat)
                     stats_counts['empty'] += 1
-                elif not last_ts:
-                    icon = "⚪"
-                    stats_counts['never'] += 1
+                elif is_external_statistic(res['name']):
+                    icon = "🔗" # Externí statistika (není entita, nemá states_meta)
+                    stats_counts['external'] += 1
                 elif not has_state:
                      icon = "👻" 
                      stats_counts['ghost'] += 1
@@ -155,18 +148,17 @@ def list_command(ctx, search_term, no_details):
                     icon = "🟢" # OK (< 1 den)
                     stats_counts['active'] += 1
                 
-                click.echo(f"{mid:<5} | {icon} | {eid:<50} | {unit:<6} | {count:<8} | {first_seen_str:<10} | {last_seen_str}")
+                click.echo(f"{mid:<5} | {icon} | {eid:<75} | {unit:<6} | {count:<8} | {first_seen_str:<10} | {last_seen_str}")
             
-            click.echo("-" * 120)
+            click.echo("-" * 145)
             click.echo("SOUHRN:")
             click.echo(f" 🟢 Aktivní (< 24h):     {stats_counts['active']:<5} (V pořádku, běží)")
             click.echo(f" 🟠 Starší data (> 1d):  {stats_counts['older']:<5} (Možná občasný senzor?)")
             click.echo(f" 🔴 Neaktivní (> 7d):    {stats_counts['inactive']:<5} (Dlouho bez dat)")
             click.echo(f" 👻 Sirotci (bez ent.):  {stats_counts['ghost']:<5} (Statistika existuje, ale senzor smazán?)")
+            click.echo(f" 🔗 Externí statistiky:  {stats_counts['external']:<5} (Importované integrací, nejsou to entity)")
             click.echo(f" ⚠️  Prázdné záznamy:     {stats_counts['empty']:<5} (Metadata bez dat)")
-            if stats_counts['never'] > 0:
-                click.echo(f" ⚪ Nikdy neviděno:      {stats_counts['never']:<5}")
-            click.echo("-" * 120)
+            click.echo("-" * 145)
 
     except Exception as e:
         click.echo(f"Chyba při čtení databáze: {e}", err=True)
